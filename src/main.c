@@ -13,6 +13,7 @@
 #include <ctype.h>
 #include <readline/history.h>
 #include <readline/readline.h>
+#include <pthread.h>
 #include "select.h"
 
 #define VERSION "2.1"
@@ -21,7 +22,9 @@
 
 #define RED "\x1b[31m"
 #define RESET "\x1b[0m"
- 
+
+pthread_mutex_t mutex_stdout = PTHREAD_MUTEX_INITIALIZER; // Mutex for synchronizing output
+
 static int
 hasUpper(char ch[])
 {
@@ -63,10 +66,11 @@ dprint(char *name, int clean_out)
 		printf("[" RED "+" RESET "] Definite identification: "
 	       RED "%s" RESET "\n", name);
 	} else {
-		printf("%s 100.00\n", replace(name));
+		char buf[128];
+		replace(name, buf, sizeof(buf));
+		printf("%s 100.00\n", buf);
 	}
 }
-
 
 /* This is the first test;
  * here we identify the hash
@@ -128,15 +132,18 @@ help(char *exename)
 		"  -i   use interactive shell\n"
 		"  -s   use scripting mode\n"
 		"  -l   list supported hashing algorithms\n"
+		"  -t N specify number of threads (script mode)\n"
 		"  -h   display this panel and exit\n"
 		"  -v   print version and exit\n"
-		"\nUsage: Usage: %s [HASH] [-h|-v|-l] [-i] [-s]\n",
+		"\nUsage: %s [HASH] [-h|-v|-l] [-i] [-s] [-t N]\n",
 		exename);
 }
 
 void
 driver(char *hash, int clean_out)
 {
+	pthread_mutex_lock(&mutex_stdout); // Lock mutex for synchronized output
+
 	int len = strlen(hash);
 	const char* chars = charset(hash);
 
@@ -150,25 +157,73 @@ driver(char *hash, int clean_out)
 	definite(hash, len, clean_out);
 
 	printf("\n");
+
+	pthread_mutex_unlock(&mutex_stdout); // Unlock mutex
 }
 
-void
+void* process_hash(void* arg) {
+	char* hash = (char*)arg;
+	driver(hash, 1);
+	free(hash);
+	pthread_exit(NULL);
+}
+
+int
 main(int argc, char* argv[])
 {
+	int max_threads = 4; // Default number of threads
 
 	if (argc==1) {
 		banner();
-		printf("Usage: %s [HASH] [-h|-v|-l] [-i] [-s]\n", argv[0]);
+		printf("Usage: %s [HASH] [-h|-v|-l] [-i] [-s] [-t N]\n", argv[0]);
 		exit(EXIT_FAILURE);
 	}
 
-	if (strcmp(argv[1],"-h")==0 || strcmp(argv[1],"--help")==0){
-		banner();
-		help(argv[0]);
-	} else if (strcmp(argv[1], "-l")==0) {
-		banner();
-		list();
-	} else if (strcmp(argv[1], "-i")==0) {
+	// Variables to track options
+	int interactive_mode = 0;
+	int script_mode = 0;
+	int i;
+
+	// Parse command-line arguments
+	for (i = 1; i < argc; i++) {
+		if (strcmp(argv[i],"-h")==0 || strcmp(argv[i],"--help")==0){
+			banner();
+			help(argv[0]);
+			exit(EXIT_SUCCESS);
+		} else if (strcmp(argv[i], "-l")==0) {
+			banner();
+			list();
+			exit(EXIT_SUCCESS);
+		} else if (strcmp(argv[i], "-i")==0) {
+			interactive_mode = 1;
+		} else if (strcmp(argv[i], "-s")==0) {
+			script_mode = 1;
+		} else if (strcmp(argv[i], "-v")==0) {
+			printf("houndsniff-v%s\n", VERSION);  
+			exit(EXIT_SUCCESS);    
+		} else if (strcmp(argv[i], "-t")==0) {
+			if (i + 1 < argc) {
+				max_threads = atoi(argv[++i]);
+				if (max_threads <= 0) {
+					fprintf(stderr, "Invalid thread count: %d\n", max_threads);
+					exit(EXIT_FAILURE);
+				}
+			} else {
+				fprintf(stderr, "Option -t requires an argument.\n");
+				exit(EXIT_FAILURE);
+			}
+		} else if (argv[i][0] == '-') {
+			fprintf(stderr, "Unknown option: %s\n", argv[i]);
+			exit(EXIT_FAILURE);
+		} else {
+			// Assume it's a hash argument
+			banner();
+			driver(argv[i], 0);
+			exit(EXIT_SUCCESS);
+		}
+	}
+
+	if (interactive_mode) {
 		banner();
 		using_history();
 		while(1) {
@@ -183,18 +238,35 @@ main(int argc, char* argv[])
 			printf("--------------------------\n");
 			free(hash);
 		}
-	} else if (strcmp(argv[1], "-s")==0) {
+	} else if (script_mode) {
 		char buffer[BUFFER_SIZE];
+		pthread_t *threads = malloc(sizeof(pthread_t) * max_threads);
+		int thread_count = 0;
+
 		while (fgets(buffer, sizeof(buffer), stdin) != NULL) {
 			strtok(buffer, "\n");
-			driver(buffer, 1);
+			// Create a copy of buffer
+			char *hash_copy = strdup(buffer);
+			// Create a thread to process the hash
+			pthread_create(&threads[thread_count], NULL, process_hash, (void*)hash_copy);
+			thread_count++;
+			if (thread_count == max_threads) {
+				// Wait for threads to finish
+				int j;
+				for (j = 0; j < thread_count; j++) {
+					pthread_join(threads[j], NULL);
+				}
+				thread_count = 0;
+			}
 		}
-
-	} else if (strcmp(argv[1], "-v")==0) {
-		printf("houndsniff-v%s\n", VERSION);      
+		// Wait for any remaining threads to finish
+		for (int j = 0; j < thread_count; j++) {
+			pthread_join(threads[j], NULL);
+		}
+		free(threads);
 	} else {
-		banner();
-		driver(argv[1], 0);
+		fprintf(stderr, "No valid mode specified. Use -i for interactive mode or -s for script mode.\n");
+		exit(EXIT_FAILURE);
 	}
-	exit(EXIT_SUCCESS);
+	return EXIT_SUCCESS;
 }
