@@ -6,10 +6,10 @@ FILES=main.c select.c
 BIN=houndsniff
 
 all: main.c select.c
-	$(CC) $(FILES) -o $(BIN) -lreadline
+	$(CC) $(FILES) -o $(BIN) -lreadline -pthread
 
 install: main.c select.c $(BIN).1
-	$(CC) $(FILES) -o $(BIN) -lreadline
+	$(CC) $(FILES) -o $(BIN) -lreadline -pthread
 	sudo cp $(BIN) /usr/bin
 	sudo cp $(BIN).1 /usr/share/man/man1
 	sudo mandb
