@@ -20,13 +20,14 @@
 void list(void);
 int matchcmp(const void *, const void *);
 void sel(int length, const char *charset, int clean_out);
-char *replace(char *str);
+void replace(const char *str, char *str2, int maxlen);
 
-char *
-replace(char *str)
+void
+replace(const char *str, char *str2, int maxlen)
 {
 	int len = strlen(str);
-	char *str2 = malloc (sizeof (char) * len);
+	if (len >= maxlen)
+		len = maxlen - 1;
 	int i;
 
 	for(i = 0; i < len; i++) {	
@@ -35,8 +36,7 @@ replace(char *str)
 		else
 			str2[i] = str[i];
 	}
-
-	return str2;
+	str2[len] = '\0';
 }
 
 /* Notes:
@@ -148,8 +148,9 @@ sel(int length, const char *charset, int clean_out)
 		       	       i + 1, hashes[matches[i]].name,
 			hashes[matches[i]].likelihood);
 		} else {
-			printf("%s %.2f\n", replace(hashes[matches[i]].name),
-			       hashes[matches[i]].likelihood);
+			char buf[128];
+			replace(hashes[matches[i]].name, buf, sizeof(buf));
+			printf("%s %.2f\n", buf, hashes[matches[i]].likelihood);
 		}
 	}
 }
